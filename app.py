@@ -4,11 +4,55 @@ from datetime import datetime, timedelta
 import io
 from banco import conectar, criar_tabelas
 from sqlalchemy.sql import text
-import pytz  # Biblioteca para fuso horário do Brasil
+import pytz  
+import smtplib  
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Configuração visual da página do Streamlit
 st.set_page_config(page_title="Controle de Estoque - Obra", layout="wide")
 st.title("🏗️ Sistema de Inventário e Estoque de Obra")
+
+# --- 🔐 CONFIGURAÇÃO DEFINITIVA DOS ALERTAS POR E-MAIL ---
+EMAIL_REMETENTE = "isaacmendes2516@gmail.com"  
+SENHA_REMETENTE = "dqzmmvpowdoznheb"  
+EMAIL_DESTINATARIO = "isaacmendes2516@gmail.com"  
+
+def enviar_email_alerta(nome_material, qtd_atual, qtd_minima, unidade):
+    """Função que conecta no Gmail e dispara o alerta silenciosamente"""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_REMETENTE
+        msg['To'] = EMAIL_DESTINATARIO
+        msg['Subject'] = f"⚠️ ALERTA DE ESTOQUE CRÍTICO: {nome_material}"
+        
+        corpo = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+            <h2 style="color: #cc0000;">⚠️ Insumo Abaixo do Estoque Mínimo!</h2>
+            <p>O sistema de estoque da obra detectou uma retirada crítica:</p>
+            <table style="border-collapse: collapse; width: 100%; max-width: 500px;">
+                <tr style="background-color: #f2f2f2;"><td style="padding: 8px; border: 1px solid #ddd;"><b>Material:</b></td><td style="padding: 8px; border: 1px solid #ddd;">{nome_material}</td></tr>
+                <tr><td style="padding: 8px; border: 1px solid #ddd;"><b>Saldo Atual:</b></td><td style="padding: 8px; border: 1px solid #ddd; color: red; font-weight: bold;">{qtd_atual} {unidade}</td></tr>
+                <tr style="background-color: #f2f2f2;"><td style="padding: 8px; border: 1px solid #ddd;"><b>Estoque Mínimo Exigido:</b></td><td style="padding: 8px; border: 1px solid #ddd;">{qtd_minima} {unidade}</td></tr>
+            </table>
+            <p style="margin-top: 20px;"><i>💡 Recomendação: Entre em contato com o fornecedor para providenciar a reposição o quanto antes.</i></p>
+            <br>
+            <hr style="border: 0; border-top: 1px solid #eee;">
+            <p style="font-size: 11px; color: #888;">E-mail automático enviado pelo Sistema de Estoque Vez Mais.</p>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(corpo, 'html'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_REMETENTE, SENHA_REMETENTE)
+        server.sendmail(EMAIL_REMETENTE, EMAIL_DESTINATARIO, msg.as_string())
+        server.quit()
+        print("-> E-mail de alerta enviado com sucesso!")
+    except Exception as e:
+        print(f"Erro ao enviar e-mail de alerta: {e}")
 
 # --- SISTEMA DE LOGIN E CONTROLE DE ACESSO ---
 if "autenticado" not in st.session_state:
@@ -16,7 +60,7 @@ if "autenticado" not in st.session_state:
     st.session_state["perfil"] = None
     st.session_state["usuario_logado"] = ""
 
-# Dicionário de usuários, senhas e perfis
+# Base de usuários do sistema
 USUARIOS = {
     "isaac": {"senha": "adminobra", "perfil": "Admin"},
     "equipe": {"senha": "obravezmais", "perfil": "Campo"}
@@ -25,14 +69,11 @@ USUARIOS = {
 if not st.session_state["autenticado"]:
     st.subheader("🔒 Acesso Restrito - Identifique-se")
     col_login, _ = st.columns([1, 2])
-    
     with col_login:
         with st.form("form_login"):
             usuario_input = st.text_input("Usuário").strip().lower()
             senha_input = st.text_input("Senha", type="password")
-            botao_entrar = st.form_submit_button("Entrar no Sistema")
-            
-            if botao_entrar:
+            if st.form_submit_button("Entrar no Sistema"):
                 if usuario_input in USUARIOS and USUARIOS[usuario_input]["senha"] == senha_input:
                     st.session_state["autenticado"] = True
                     st.session_state["perfil"] = USUARIOS[usuario_input]["perfil"]
@@ -46,19 +87,9 @@ if not st.session_state["autenticado"]:
 st.sidebar.markdown(f"👤 **Usuário:** {st.session_state['usuario_logado']} ({st.session_state['perfil']})")
 
 if st.session_state["perfil"] == "Admin":
-    opcoes_menu = [
-        "Visualizar Estoque", 
-        "Materiais em Alerta",
-        "Cadastrar Novo Material", 
-        "Registrar Movimentação",
-        "Histórico Avançado e Relatórios",
-        "Gerenciar Usuários"
-    ]
+    opcoes_menu = ["Visualizar Estoque", "Materiais em Alerta", "Cadastrar Novo Material", "Registrar Movimentação", "Histórico Avançado e Relatórios", "Gerenciar Usuários"]
 else:
-    opcoes_menu = [
-        "Visualizar Estoque", 
-        "Registrar Movimentação"
-    ]
+    opcoes_menu = ["Visualizar Estoque", "Registrar Movimentação"]
 
 menu = st.sidebar.selectbox("Menu de Navegação", opcoes_menu)
 
@@ -67,7 +98,7 @@ if st.sidebar.button("🚪 Logout / Sair"):
     st.session_state["perfil"] = None
     st.rerun()
 
-# --- FUNÇÕES INTERNAS ---
+# --- FUNÇÕES INTERNAS DO BANCO ---
 def listar_materials():
     engine = conectar()
     return pd.read_sql_query(text("SELECT id, nome, unidade, quantidade, estoque_minimo FROM materiais ORDER BY nome"), engine)
@@ -85,19 +116,6 @@ def calcular_autonomia(df_estoque):
     df_estoque['Autonomia Estimada'] = [f"⏳ {qtd/consumo_diario.get(m_id, 0):.1f} dias" if consumo_diario.get(m_id, 0) > 0 else "♾️ Estável" for m_id, qtd in zip(df_estoque['id'], df_estoque['quantidade'])]
     return df_estoque
 
-def cadastrar_material(nome, unidade, estoque_minimo):
-    engine = conectar()
-    try:
-        with engine.connect() as conn:
-            conn.execute(
-                text("INSERT INTO materiais (nome, unidade, quantidade, estoque_minimo) VALUES (:nome, :unidade, 0, :estoque_minimo)"),
-                {"nome": nome.upper(), "unidade": unidade, "estoque_minimo": estoque_minimo}
-            )
-            conn.commit()
-        st.success(f"Material '{nome.upper()}' cadastrado com sucesso!")
-    except Exception as e:
-        st.error(f"Erro ao cadastrar no banco: {e}")
-
 def registrar_movimento(material_id, tipo, qtd, responsavel):
     engine = conectar()
     fuso_br = pytz.timezone('America/Sao_Paulo')
@@ -110,6 +128,17 @@ def registrar_movimento(material_id, tipo, qtd, responsavel):
             conn.execute(text("UPDATE materiais SET quantidade = quantidade + :delta WHERE id = :id"), {"delta": delta, "id": int(material_id)})
             conn.commit()
         st.success(f"Registrado com sucesso!")
+        
+        if tipo == "SAÍDA":
+            df_atual = listar_materials()
+            mat_info = df_atual[df_atual['id'] == int(material_id)].iloc[0]
+            saldo_pos_saida = float(mat_info['quantidade'])
+            estoque_min = float(mat_info['estoque_minimo'])
+            
+            if saldo_pos_saida < estoque_min:
+                enviar_email_alerta(mat_info['nome'], saldo_pos_saida, estoque_min, mat_info['unidade'])
+                st.warning(f"⚠️ Alerta enviado para o e-mail! O estoque de {mat_info['nome']} está crítico.")
+                
     except Exception as e:
         st.error(f"Erro: {e}")
 
@@ -130,26 +159,16 @@ if menu == "Visualizar Estoque":
     df_vis.columns = ['ID', 'Material', 'Unidade', 'quantidade', 'estoque_minimo', 'Autonomia (7 dias)']
     st.dataframe(df_vis.style.apply(lambda r: ['background-color: #ffcccc' if r['quantidade'] < r['estoque_minimo'] else '' for _ in r], axis=1), use_container_width=True)
 
-    # --- HISTÓRICO CORRIGIDO (AQUI ESTÁ A CORREÇÃO DA CONSULTA VAZIA) ---
     st.subheader("📜 Últimas 10 Movimentações Gerais")
     engine = conectar()
     df_mov = pd.read_sql_query(text("""
-        SELECT m.tipo AS "Operação", 
-               mat.nome AS "Material", 
-               m.quantidade AS "Qtd", 
-               mat.unidade AS "Unidade", 
-               to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", 
-               m.responsavel AS "Responsável"
-        FROM movimentacoes m
-        JOIN materiais mat ON m.material_id = mat.id
-        ORDER BY m.data DESC 
-        LIMIT 10
+        SELECT m.tipo AS "Operação", mat.nome AS "Material", m.quantidade AS "Qtd", mat.unidade AS "Unidade", 
+               to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", m.responsavel AS "Responsável"
+        FROM movimentacoes m JOIN materiais mat ON m.material_id = mat.id ORDER BY m.data DESC LIMIT 10
     """), engine)
     
-    if df_mov.empty:
-        st.text("Nenhuma movimentação realizada.")
-    else:
-        st.dataframe(df_mov, use_container_width=True)
+    if df_mov.empty: st.text("Nenhuma movimentação realizada.")
+    else: st.dataframe(df_mov, use_container_width=True)
 
 elif menu == "Registrar Movimentação":
     st.header("🔄 Registrar Entrada ou Saída")
@@ -165,42 +184,74 @@ elif menu == "Registrar Movimentação":
         if st.form_submit_button("Confirmar"):
             id_m = lista[mat]
             saldo = df_mat[df_mat['id'] == id_m]['quantidade'].values[0]
-            if tipo == "SAÍDA" and qtd > saldo:
-                st.error(f"Saldo insuficiente! Atual: {saldo}")
-            else:
-                registrar_movimento(id_m, tipo, qtd, resp)
+            if tipo == "SAÍDA" and qtd > saldo: st.error(f"Saldo insuficiente! Atual: {saldo}")
+            else: registrar_movimento(id_m, tipo, qtd, resp)
 
+# 🔥 CORREÇÃO 1: ABA DE USUÁRIOS MOSTRANDO PERMISSÕES REAIS
 elif menu == "Gerenciar Usuários" and st.session_state["perfil"] == "Admin":
     st.header("👥 Gerenciamento de Usuários e Permissões")
+    st.markdown("Abaixo estão os perfis ativos autorizados a acessar o sistema da obra:")
     
-    st.subheader("Usuários Ativos no Sistema")
-    df_users = pd.DataFrame([{"Usuário": k, "Perfil": v["perfil"]} for k, v in USUARIOS.items()])
-    st.table(df_users)
+    dados_usuarios = []
+    for k, v in USUARIOS.items():
+        dados_usuarios.append({
+            "Usuário Logável": k,
+            "Chave/Senha de Acesso": v["senha"],
+            "Nível de Permissão (Perfil)": "🛠️ Administrador (Acesso Total)" if v["perfil"] == "Admin" else "🚜 Campo (Apenas Lança Movimentações)"
+        })
+    df_users = pd.DataFrame(dados_usuarios)
+    st.dataframe(df_users, use_container_width=True)
+
+# 🔥 CORREÇÃO 2 e 3: HISTÓRICO FILTRANDO POR DATA E GERANDO RELATÓRIO EXCEL
+elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"] == "Admin":
+    st.header("📅 Histórico Completo e Relatórios de Auditoria")
     
-    st.markdown("---")
-    st.subheader("🛠️ O que cada perfil pode fazer?")
+    fuso = pytz.timezone('America/Sao_Paulo')
     
-    col_adm, col_cam = st.columns(2)
-    with col_adm:
-        st.info("### 👑 Perfil: Admin")
-        st.markdown("""
-        - **Visualizar Estoque:** Sim (com Autonomia)
-        - **Cadastrar Materiais:** Sim
-        - **Ver Alertas Críticos:** Sim
-        - **Registrar Movimentação:** Sim (pode alterar o nome do responsável)
-        - **Histórico e Relatórios:** Sim (Filtros e Excel)
-        - **Gerenciar Usuários:** Sim
-        """)
-    with col_cam:
-        st.warning("### 👷 Perfil: Campo")
-        st.markdown("""
-        - **Visualizar Estoque:** Sim
-        - **Cadastrar Materiais:** Não
-        - **Ver Alertas Críticos:** Não
-        - **Registrar Movimentação:** Sim (nome do responsável fica travado)
-        - **Histórico e Relatórios:** Não
-        - **Gerenciar Usuários:** Não
-        """)
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        d1 = st.date_input("Data Inicial", datetime.now(fuso) - timedelta(days=7))
+    with col_d2:
+        d2 = st.date_input("Data Final", datetime.now(fuso))
+    
+    # Ajusta os filtros para pegar do início do primeiro dia até o fim do último dia
+    d1_str = f"{d1} 00:00:00"
+    d2_str = f"{d2} 23:59:59"
+    
+    engine = conectar()
+    df_hist = pd.read_sql_query(text("""
+        SELECT m.tipo AS "Operação", 
+               mat.nome AS "Material", 
+               m.quantidade AS "Qtd", 
+               mat.unidade AS "Unidade", 
+               to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", 
+               m.responsavel AS "Responsável"
+        FROM movimentacoes m 
+        JOIN materiais mat ON m.material_id = mat.id
+        WHERE m.data >= :data_inicio AND m.data <= :data_fim 
+        ORDER BY m.data DESC
+    """), engine, params={"data_inicio": d1_str, "data_fim": d2_str})
+    
+    if df_hist.empty:
+        st.warning("Nenhuma movimentação encontrada para o período selecionado.")
+    else:
+        st.subheader(f"📋 Registros encontrados no período: {len(df_hist)}")
+        st.dataframe(df_hist, use_container_width=True)
+        
+        # Criação do Relatório em Excel usando a memória ram (BytesIO)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_hist.to_excel(writer, index=False, sheet_name='Histórico_Estoque')
+        dados_excel = output.getvalue()
+        
+        st.markdown("---")
+        st.subheader("📥 Exportar Dados para a Empresa")
+        st.download_button(
+            label="🟢 Baixar Relatório em Excel (.xlsx)",
+            data=dados_excel,
+            file_name=f"Relatorio_Estoque_{d1}_a_{d2}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 elif menu == "Cadastrar Novo Material" and st.session_state["perfil"] == "Admin":
     st.header("📝 Cadastrar Insumo")
@@ -209,31 +260,11 @@ elif menu == "Cadastrar Novo Material" and st.session_state["perfil"] == "Admin"
         u = st.selectbox("Unidade", ["Saco", "m³", "Kg", "Unidade", "Barra"])
         m = st.number_input("Estoque Mínimo", value=10.0)
         if st.form_submit_button("Salvar") and n:
-            cadastrar_material(n, u, m)
-
-elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"] == "Admin":
-    st.header("📅 Histórico Completo")
-    fuso = pytz.timezone('America/Sao_Paulo')
-    d1 = st.date_input("Início", datetime.now(fuso) - timedelta(days=7))
-    d2 = st.date_input("Fim", datetime.now(fuso))
-    
-    engine = conectar()
-    query = text("""
-        SELECT m.tipo AS "Operação", mat.nome AS "Material", m.quantidade AS "Qtd", mat.unidade AS "Unidade", 
-        to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", 
-        m.responsavel AS "Responsável"
-        FROM movimentacoes m JOIN materiais mat ON m.material_id = mat.id
-        WHERE m.data::date BETWEEN :d1 AND :d2
-        ORDER BY m.data DESC
-    """)
-    df_hist = pd.read_sql_query(query, engine, params={"d1": d1, "d2": d2})
-    st.dataframe(df_hist, use_container_width=True)
-    
-    if not df_hist.empty:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_hist.to_excel(writer, index=False)
-        st.download_button("📥 Baixar Excel", output.getvalue(), "relatorio_obra.xlsx")
+            engine = conectar()
+            with engine.connect() as conn:
+                conn.execute(text("INSERT INTO materiais (nome, unidade, quantidade, estoque_minimo) VALUES (:n, :u, 0, :m)"), {"n": n, "u": u, "m": m})
+                conn.commit()
+            st.success(f"Material {n} cadastrado!")
 
 elif menu == "Materiais em Alerta" and st.session_state["perfil"] == "Admin":
     st.header("⚠️ Itens Críticos")
