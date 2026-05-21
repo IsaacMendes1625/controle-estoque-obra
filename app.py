@@ -87,7 +87,7 @@ if not st.session_state["autenticado"]:
 st.sidebar.markdown(f"👤 **Usuário:** {st.session_state['usuario_logado']} ({st.session_state['perfil']})")
 
 if st.session_state["perfil"] == "Admin":
-    opcoes_menu = ["Visualizar Estoque", "Materiais em Alerta", "Cadastrar Novo Material", "Registrar Movimentação", "Histórico Avançado e Relatórios", "Gerenciar Usuários"]
+    opcoes_menu = ["Visualizar Estoque", "Materiais em Alerta", "Gerenciar Insumos", "Registrar Movimentação", "Histórico Avançado e Relatórios", "Gerenciar Usuários"]
 else:
     opcoes_menu = ["Visualizar Estoque", "Registrar Movimentação"]
 
@@ -161,14 +161,17 @@ if menu == "Visualizar Estoque":
 
     st.subheader("📜 Últimas 10 Movimentações Gerais")
     engine = conectar()
+    
     df_mov = pd.read_sql_query(text("""
         SELECT m.tipo AS "Operação", mat.nome AS "Material", m.quantidade AS "Qtd", mat.unidade AS "Unidade", 
-               to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", m.responsavel AS "Responsável"
+               to_char(m.data AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", m.responsavel AS "Responsável"
         FROM movimentacoes m JOIN materiais mat ON m.material_id = mat.id ORDER BY m.data DESC LIMIT 10
     """), engine)
     
-    if df_mov.empty: st.text("Nenhuma movimentação realizada.")
-    else: st.dataframe(df_mov, use_container_width=True)
+    if df_mov.empty: 
+        st.text("Nenhuma movimentação realizada.")
+    else: 
+        st.dataframe(df_mov, use_container_width=True)
 
 elif menu == "Registrar Movimentação":
     st.header("🔄 Registrar Entrada ou Saída")
@@ -184,10 +187,11 @@ elif menu == "Registrar Movimentação":
         if st.form_submit_button("Confirmar"):
             id_m = lista[mat]
             saldo = df_mat[df_mat['id'] == id_m]['quantidade'].values[0]
-            if tipo == "SAÍDA" and qtd > saldo: st.error(f"Saldo insuficiente! Atual: {saldo}")
-            else: registrar_movimento(id_m, tipo, qtd, resp)
+            if tipo == "SAÍDA" and qtd > saldo: 
+                st.error(f"Saldo insuficiente! Atual: {saldo}")
+            else: 
+                registrar_movimento(id_m, tipo, qtd, resp)
 
-# 🔥 CORREÇÃO 1: ABA DE USUÁRIOS MOSTRANDO PERMISSÕES REAIS
 elif menu == "Gerenciar Usuários" and st.session_state["perfil"] == "Admin":
     st.header("👥 Gerenciamento de Usuários e Permissões")
     st.markdown("Abaixo estão os perfis ativos autorizados a acessar o sistema da obra:")
@@ -202,7 +206,6 @@ elif menu == "Gerenciar Usuários" and st.session_state["perfil"] == "Admin":
     df_users = pd.DataFrame(dados_usuarios)
     st.dataframe(df_users, use_container_width=True)
 
-# 🔥 CORREÇÃO 2 e 3: HISTÓRICO FILTRANDO POR DATA E GERANDO RELATÓRIO EXCEL
 elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"] == "Admin":
     st.header("📅 Histórico Completo e Relatórios de Auditoria")
     
@@ -214,17 +217,17 @@ elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"]
     with col_d2:
         d2 = st.date_input("Data Final", datetime.now(fuso))
     
-    # Ajusta os filtros para pegar do início do primeiro dia até o fim do último dia
-    d1_str = f"{d1} 00:00:00"
-    d2_str = f"{d2} 23:59:59"
+    d1_str = f"{d1} 00:00:00-03:00"
+    d2_str = f"{d2} 23:59:59-03:00"
     
     engine = conectar()
+    
     df_hist = pd.read_sql_query(text("""
         SELECT m.tipo AS "Operação", 
                mat.nome AS "Material", 
                m.quantidade AS "Qtd", 
                mat.unidade AS "Unidade", 
-               to_char(m.data, 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", 
+               to_char(m.data AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI:SS') AS "Data/Hora", 
                m.responsavel AS "Responsável"
         FROM movimentacoes m 
         JOIN materiais mat ON m.material_id = mat.id
@@ -238,7 +241,6 @@ elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"]
         st.subheader(f"📋 Registros encontrados no período: {len(df_hist)}")
         st.dataframe(df_hist, use_container_width=True)
         
-        # Criação do Relatório em Excel usando a memória ram (BytesIO)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_hist.to_excel(writer, index=False, sheet_name='Histórico_Estoque')
@@ -253,22 +255,82 @@ elif menu == "Histórico Avançado e Relatórios" and st.session_state["perfil"]
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-elif menu == "Cadastrar Novo Material" and st.session_state["perfil"] == "Admin":
-    st.header("📝 Cadastrar Insumo")
-    with st.form("f_cad"):
-        n = st.text_input("Nome").upper()
-        u = st.selectbox("Unidade", ["Saco", "m³", "Kg", "Unidade", "Barra"])
-        m = st.number_input("Estoque Mínimo", value=10.0)
-        if st.form_submit_button("Salvar") and n:
-            engine = conectar()
-            with engine.connect() as conn:
-                conn.execute(text("INSERT INTO materiais (nome, unidade, quantidade, estoque_minimo) VALUES (:n, :u, 0, :m)"), {"n": n, "u": u, "m": m})
-                conn.commit()
-            st.success(f"Material {n} cadastrado!")
+# 🔥 TELA: GERENCIAR INSUMOS (ABAS MÚLTIPLAS E CORRIGIDAS)
+elif menu == "Gerenciar Insumos" and st.session_state["perfil"] == "Admin":
+    st.header("📝 Gerenciamento Completo de Insumos")
+    
+    tab_cad, tab_edit, tab_del = st.tabs(["➕ Cadastrar Novo", "✏️ Editar Mínimo", "🗑️ Excluir Material"])
+    
+    # Aba 1: Cadastrar
+    with tab_cad:
+        st.subheader("Cadastrar Novo Material")
+        with st.form("f_cad"):
+            n = st.text_input("Nome do Insumo").upper()
+            u = st.selectbox("Unidade de Medida", ["Saco", "m³", "Kg", "Unidade", "Barra"])
+            m = st.number_input("Avisar quando o estoque ficar abaixo de:", value=10.0)
+            if st.form_submit_button("Salvar Cadastro") and n:
+                engine = conectar()
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("INSERT INTO materiais (nome, unidade, quantidade, estoque_minimo) VALUES (:n, :u, 0, :m)"), {"n": n, "u": u, "m": m})
+                        conn.commit()
+                    st.success(f"Material {n} cadastrado com sucesso!")
+                except Exception as e:
+                    st.error("Erro ao cadastrar. O material já existe com esse nome?")
+                    
+    # Aba 2: Editar 
+    with tab_edit:
+        st.subheader("Alterar o Alerta de Estoque Mínimo")
+        df_mat = listar_materials()
+        if not df_mat.empty:
+            mat_sel = st.selectbox("Selecione o Material", df_mat['nome'].tolist())
+            min_atual = df_mat[df_mat['nome'] == mat_sel]['estoque_minimo'].values[0]
+            novo_min = st.number_input(f"Novo limite mínimo (Atual: {min_atual})", min_value=0.0, step=1.0, value=float(min_atual))
+            
+            if st.button("Atualizar Limite"):
+                engine = conectar()
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("UPDATE materiais SET estoque_minimo = :m WHERE nome = :n"), {"m": novo_min, "n": mat_sel})
+                        conn.commit()
+                    st.success(f"Feito! O estoque mínimo de {mat_sel} foi atualizado para {novo_min}.")
+                except Exception as e:
+                    st.error(f"Erro ao atualizar: {e}")
+        else:
+            st.info("Nenhum material cadastrado ainda.")
+
+    # Aba 3: Excluir
+    with tab_del:
+        st.subheader("Remover Material do Sistema")
+        df_mat = listar_materials()
+        if not df_mat.empty:
+            st.warning("⚠️ **ATENÇÃO:** Excluir um material apagará permanentemente todo o histórico de entradas e saídas dele no banco de dados!")
+            with st.form("f_del"):
+                mat_del = st.selectbox("Selecione o Material para DELETAR", df_mat['nome'].tolist())
+                confirmar = st.checkbox("Estou ciente e desejo apagar este material e todo o seu histórico.")
+                
+                if st.form_submit_button("🚨 Excluir Permanentemente"):
+                    if confirmar:
+                        engine = conectar()
+                        try:
+                            id_mat = int(df_mat[df_mat['nome'] == mat_del]['id'].values[0])
+                            with engine.connect() as conn:
+                                conn.execute(text("DELETE FROM movimentacoes WHERE material_id = :id"), {"id": id_mat})
+                                conn.execute(text("DELETE FROM materiais WHERE id = :id"), {"id": id_mat})
+                                conn.commit()
+                            st.success(f"O material {mat_del} e todo o seu histórico foram apagados com sucesso!")
+                        except Exception as e:
+                            st.error(f"Erro ao excluir: {e}")
+                    else:
+                        st.error("Você precisa marcar a caixa de confirmação para poder excluir.")
+        else:
+            st.info("Nenhum material cadastrado ainda.")
 
 elif menu == "Materiais em Alerta" and st.session_state["perfil"] == "Admin":
     st.header("⚠️ Itens Críticos")
     df = listar_materials()
     crit = df[df['quantidade'] < df['estoque_minimo']]
-    if crit.empty: st.success("Tudo OK!")
-    else: st.dataframe(crit, use_container_width=True)
+    if crit.empty: 
+        st.success("Tudo OK!")
+    else: 
+        st.dataframe(crit, use_container_width=True)
