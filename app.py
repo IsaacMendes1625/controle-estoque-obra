@@ -15,7 +15,7 @@ st.title("🏗️ Sistema de Inventário e Estoque de Obra")
 
 # --- 🧠 GERENCIADOR DE CONEXÃO CACHADA (EVITA TRAVAR O BANCO NA NUVEM) ---
 @st.cache_resource
-def obter_engine():
+def obtener_engine():
     return conectar()
 
 # --- 🖼️ CONFIGURAÇÃO DE IMAGEM DE FUNDO (PROTEGIDA CONTRA CORTES) ---
@@ -33,9 +33,12 @@ def enviar_email_alerta(nome_material, qtd_atual, qtd_minima, unidade):
         msg = MIMEMultipart()
         msg['From'] = EMAIL_REMETENTE
         msg['To'] = EMAIL_DESTINATARIO
-        msg['Subject'] = f"⚠️ ESTOQUE CRÍTICO: {nome_material}"
-        corpo = f"Alerta Vez Mais: O material {nome_material} atingiu o nivel crítico. Saldo: {qtd_atual} {unidade}. Mínimo: {qtd_minima}."
-        msg.attach(MIMEText(corpo, 'plain'))
+        msg['Subject'] = f"⚠️ ALERTA DE ESTOQUE CRÍTICO: {nome_material}"
+        
+        # 🔥 RETORNO DO LAYOUT PROFISSIONAL: HTML Compactado em linha única contra cortes do Bloco de Notas
+        corpo_html = "<html><body style='font-family: Arial, sans-serif; line-height: 1.6;'><h2 style='color: #cc0000;'>⚠️ Insumo Abaixo do Estoque Mínimo!</h2><p>O sistema de estoque da obra detectou uma retirada crítica:</p><table style='border-collapse: collapse; width: 100%; max-width: 500px;'><tr style='background-color: #f2f2f2;'><td style='padding: 8px; border: 1px solid #ddd;'><b>Material:</b></td><td style='padding: 8px; border: 1px solid #ddd;'>" + str(nome_material) + "</td></tr><tr><td style='padding: 8px; border: 1px solid #ddd;'><b>Saldo Atual:</b></td><td style='padding: 8px; border: 1px solid #ddd; color: red; font-weight: bold;'>" + str(qtd_atual) + " " + str(unidade) + "</td></tr><tr style='background-color: #f2f2f2;'><td style='padding: 8px; border: 1px solid #ddd;'><b>Estoque Mínimo Exigido:</b></td><td style='padding: 8px; border: 1px solid #ddd;'>" + str(qtd_minima) + " " + str(unidade) + "</td></tr></table><p style='margin-top: 20px;'><i>💡 Recomendação: Entre em contato com o fornecedor para providenciar a reposição o quanto antes.</i></p><br><hr style='border: 0; border-top: 1px solid #eee;'><p style='font-size: 11px; color: #888;'>E-mail automático enviado pelo Sistema de Estoque Vez Mais.</p></body></html>"
+        
+        msg.attach(MIMEText(corpo_html, 'html'))
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_REMETENTE, SENHA_REMETENTE)
@@ -85,13 +88,13 @@ if st.sidebar.button("🚪 Sair"):
     st.session_state["autenticado"] = False
     st.rerun()
 
-# --- FUNÇÕES INTERNAS OTIMIZADAS ---
+# --- FUNÇÕES INTERNAS ---
 def listar_materials():
-    engine = obter_engine()
+    engine = obtener_engine()
     return pd.read_sql_query(text("SELECT id, nome, unidade, quantidade, estoque_minimo FROM materiais ORDER BY nome"), engine)
 
 def calcular_autonomia(df_estoque):
-    engine = obter_engine()
+    engine = obtener_engine()
     fuso_br = pytz.timezone('America/Sao_Paulo')
     hoje = datetime.now(fuso_br).date()
     data_limite = (hoje - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -113,9 +116,8 @@ def calcular_autonomia(df_estoque):
     return df_estoque
 
 def registrar_movimento(material_id, tipo, qtd, responsavel):
-    engine = obter_engine()
+    engine = obtener_engine()
     fuso_br = pytz.timezone('America/Sao_Paulo')
-    # 🔥 Força a captura exata do horário local atual e converte em texto puro para o banco não distorcer
     data_br_texto = datetime.now(fuso_br).strftime('%Y-%m-%d %H:%M:%S')
     try:
         with engine.connect() as conn:
@@ -159,7 +161,7 @@ if menu == "Estoque":
     st.markdown("---")
 
     st.subheader("📜 Últimas 10 Movimentações Gerais")
-    engine = obter_engine()
+    engine = obtener_engine()
     df_mov = pd.read_sql_query(text("SELECT m.tipo AS \"Operação\", mat.nome AS \"Material\", m.quantidade AS \"Qtd\", mat.unidade AS \"Unidade\", to_char(m.data AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI:SS') AS \"Data/Hora\", m.responsavel AS \"Responsável\" FROM movimentacoes m JOIN materiais mat ON m.material_id = mat.id ORDER BY m.data DESC LIMIT 10"), engine)
     
     if df_mov.empty: 
@@ -195,7 +197,7 @@ elif menu == "Histórico" and st.session_state["perfil"] == "Admin":
     with col_d2: d2 = st.date_input("Data Final", datetime.now(fuso))
     
     d1_str, d2_str = f"{d1} 00:00:00-03:00", f"{d2} 23:59:59-03:00"
-    engine = obter_engine()
+    engine = obtener_engine()
     
     df_hist = pd.read_sql_query(text("SELECT m.tipo AS \"Operação\", mat.nome AS \"Material\", m.quantidade AS \"Qtd\", mat.unidade AS \"Unidade\", to_char(m.data AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI:SS') AS \"Data/Hora\", m.responsavel AS \"Responsável\" FROM movimentacoes m JOIN materiais mat ON m.material_id = mat.id WHERE m.data >= :data_inicio AND m.data <= :data_fim ORDER BY m.data DESC"), engine, params={"data_inicio": d1_str, "data_fim": d2_str})
     
@@ -217,7 +219,7 @@ elif menu == "Histórico" and st.session_state["perfil"] == "Admin":
             df_hist = df_hist[df_hist["Material"] == filtro_mat]
             
         if df_hist.empty:
-            st.info("Nenhum registro corresponde aos filtros selecionados acima.")
+            st.info("Nenhum registro corresponds aos filtros selecionados acima.")
         else:
             st.subheader(f"📋 Registros encontrados no período: {len(df_hist)}")
             
@@ -243,7 +245,7 @@ elif menu == "Insumos" and st.session_state["perfil"] == "Admin":
             u = st.selectbox("Unidade", ["Saco", "m³", "Kg", "Unidade", "Barra"])
             m = st.number_input("Estoque Mínimo", value=10.0)
             if st.form_submit_button("Salvar") and n:
-                engine = obter_engine()
+                engine = obtener_engine()
                 try:
                     with engine.connect() as conn:
                         conn.execute(text("INSERT INTO materiais (nome, unidade, quantidade, estoque_minimo) VALUES (:n, :u, 0, :m)"), {"n": n, "u": u, "m": m})
@@ -257,7 +259,7 @@ elif menu == "Insumos" and st.session_state["perfil"] == "Admin":
             min_atual = df_mat[df_mat['nome'] == mat_sel]['estoque_minimo'].values[0]
             novo_min = st.number_input(f"Novo limite (Atual: {min_atual})", min_value=0.0, step=1.0, value=float(min_atual))
             if st.button("Atualizar Limite"):
-                engine = obter_engine()
+                engine = obtener_engine()
                 with engine.connect() as conn:
                     conn.execute(text("UPDATE materiais SET estoque_minimo = :m WHERE nome = :n"), {"m": novo_min, "n": mat_sel})
                     conn.commit()
@@ -269,7 +271,7 @@ elif menu == "Insumos" and st.session_state["perfil"] == "Admin":
                 mat_del = st.selectbox("Material para DELETAR", df_mat['nome'].tolist())
                 confirmar = st.checkbox("Desejo apagar este material e todo o seu histórico.")
                 if st.form_submit_button("🚨 Excluir Permanentemente") and confirmar:
-                    engine = obter_engine()
+                    engine = obtener_engine()
                     id_mat = int(df_mat[df_mat['nome'] == mat_del]['id'].values[0])
                     with engine.connect() as conn:
                         conn.execute(text("DELETE FROM movimentacoes WHERE material_id = :id"), {"id": id_mat})
